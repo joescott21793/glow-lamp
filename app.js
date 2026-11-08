@@ -109,11 +109,25 @@ function setBri(pct, { push = true } = {}) {
 }
 
 // ---------- connect ----------
-async function connect() {
+// Look only for things that advertise like a lamp. Some browsers (Bluefy on iPhone)
+// hide unnamed devices from the "show everything" list, but still match these filters.
+function lampFilters() {
+  const filters = [{ services: [ALL_SERVICES.find((s) => s.startsWith("00003519"))] }];
+  for (const p of PROTOCOLS) {
+    filters.push({ services: [p.service] });
+    for (const n of p.namePrefixes) filters.push({ namePrefix: n });
+  }
+  return filters;
+}
+
+async function connect(showAll = false) {
   if (!navigator.bluetooth) { showUnsupported(); return; }
   try {
-    setStatus("Choose your lamp…");
-    const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ALL_SERVICES });
+    setStatus(showAll ? "Choose your lamp from all devices…" : "Looking for lamps…");
+    const options = showAll
+      ? { acceptAllDevices: true, optionalServices: ALL_SERVICES }
+      : { filters: lampFilters(), optionalServices: ALL_SERVICES };
+    const device = await navigator.bluetooth.requestDevice(options);
     state.device = device;
     store.set("lastName", device.name || "");
     device.addEventListener("gattserverdisconnected", onDisconnect);
@@ -383,7 +397,8 @@ function showUnsupported() {
 }
 
 // ---------- wire up ----------
-$("#connect").onclick = connect;
+$("#connect").onclick = () => connect(false);
+$("#connectAll").onclick = () => connect(true);
 $("#demo").onclick = startDemo;
 $("#power").onclick = () => { cancelFade(); setPower(!state.on); };
 $("#bri").oninput = (e) => { cancelFade(); setBri(+e.target.value); };
