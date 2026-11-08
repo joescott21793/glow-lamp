@@ -58,15 +58,24 @@ async function pump() {
       for (const bytes of Array.isArray(value[0]) ? value : [value]) {
         log("→ " + bytesToHex(bytes));
         if (state.demo || !state.char) { await new Promise((r) => setTimeout(r, 20)); continue; }
-        const data = new Uint8Array(bytes);
-        try {
-          if (state.char.properties.writeWithoutResponse) await state.char.writeValueWithoutResponse(data);
-          else await state.char.writeValueWithResponse(data);
-        } catch (e) { log("write failed: " + e.message); }
+        try { await writeChar(state.char, new Uint8Array(bytes)); }
+        catch (e) { log("write failed: " + e.message); }
         await new Promise((r) => setTimeout(r, 25));
       }
     }
   } finally { writing = false; }
+}
+
+// Prefer an acknowledged write when the lamp supports it (that's what the working
+// Home Assistant integrations do), and fall back to whatever this browser offers.
+// Bluefy and older browsers may lack the newer write methods.
+async function writeChar(c, data) {
+  const p = c.properties;
+  const mode = store.get("writeMode", "auto");
+  const withResp = mode === "with" || (mode === "auto" && (p.write || !p.writeWithoutResponse));
+  if (withResp && c.writeValueWithResponse) return c.writeValueWithResponse(data);
+  if (!withResp && c.writeValueWithoutResponse) return c.writeValueWithoutResponse(data);
+  return c.writeValue(data);
 }
 
 // ---------- high-level lamp actions ----------
@@ -161,7 +170,9 @@ async function attach(device) {
   }
   await buildExplorer(services);
   if (state.proto) {
-    setStatus("Connected · " + (device.name || "lamp"), true);
+    setStatus("Connected · " + (device.name || "lamp") + " · " + state.proto.name, true);
+    const p = state.char.properties;
+    log(`connected: ${device.name || "?"} as ${state.proto.id}; write=${p.write} noResp=${p.writeWithoutResponse}; services ${uuids.map(shortUuid).join(" ")}`);
     document.body.dataset.connected = "yes";
     renderEffects();
     setPower(true);
@@ -383,7 +394,7 @@ $("#rawSend").onclick = async () => {
   const bytes = ($("#raw").value.match(/[0-9a-f]{2}/gi) || []).map((h) => parseInt(h, 16));
   if (!opt?._char || !bytes.length) { log("pick a characteristic and enter hex bytes"); return; }
   log("raw → " + bytesToHex(bytes));
-  try { await opt._char.writeValue(new Uint8Array(bytes)); } catch (e) { log("raw write failed: " + e.message); }
+  try { await writeChar(opt._char, new Uint8Array(bytes)); } catch (e) { log("raw write failed: " + e.message); }
 };
 $("#protoSelect").onchange = async (e) => {
   if (!state.device) return;
@@ -403,6 +414,12 @@ $("#demo").onclick = startDemo;
 $("#power").onclick = () => { cancelFade(); setPower(!state.on); };
 $("#bri").oninput = (e) => { cancelFade(); setBri(+e.target.value); };
 $("#fadeCancel").onclick = cancelFade;
+$("#writeMode").value = store.get("writeMode", "auto");
+$("#writeMode").onchange = (e) => {
+  store.set("writeMode", e.target.value);
+  log("write mode: " + e.target.value);
+  if (state.proto) setPower(true);
+};
 $("#sunset").onclick = () => startFade({ toRgb: [255, 30, 0], toBri: 1, minutes: +$("#fadeMin").value, thenOff: true });
 $("#sunrise").onclick = () => {
   state.hsv = rgbToHsv([255, 20, 0]); state.bri = 1;
