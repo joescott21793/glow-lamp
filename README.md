@@ -22,12 +22,17 @@ The lamp type is detected automatically from its Bluetooth services:
 
 | Protocol | Bluetooth name usually starts with | Service / characteristic |
 |---|---|---|
+| MeRGBW sunset lamps (Tsrarey etc.) | `Sunset…` | `FFF0` / `FFF3` (+ status on `FFF4`) |
 | ELK-BLEDOM family | `ELK-BLEDOM`, `MELK`, `LEDBLE`, `duoCo` | `FFF0` / `FFF3` |
 | Triones family | `Triones`, `LEDnet`, `QHM-` | `FFD5` / `FFD9` |
 
 If your lamp connects but says the language is unknown, open **Advanced**. It lists the
 characteristics the lamp accepts writes on, so you can try commands. New protocols go in
 [`protocols.js`](protocols.js).
+
+The MeRGBW protocol was worked out by
+[King1704G](https://github.com/King1704G/custom_components-sunset_light_cheapass_amazon_light) and
+[davidanthoff/ha-mergbw](https://github.com/davidanthoff/ha-mergbw). Thanks!
 
 ## How to use
 

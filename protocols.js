@@ -4,7 +4,41 @@
 const u = (n) => `0000${n.toString(16).padStart(4, "0")}-0000-1000-8000-00805f9b34fb`;
 const clamp = (v, lo = 0, hi = 255) => Math.max(lo, Math.min(hi, Math.round(v)));
 
+// MeRGBW sunset lamps (Tsrarey and similar): 55 cmd FF len payload checksum.
+// Protocol worked out by github.com/King1704G and github.com/davidanthoff (ha-mergbw).
+function mergbwFrame(cmd, payload = []) {
+  const body = [0x55, cmd, 0xff, payload.length + 5, ...payload];
+  let s = body.reduce((a, b) => a + b, 0);
+  while (s > 0xff) s = (s >> 8) + (s & 0xff);
+  return [...body, ~s & 0xff];
+}
+
 export const PROTOCOLS = [
+  {
+    id: "mergbw",
+    name: "MeRGBW sunset lamp",
+    service: u(0xfff0),
+    write: u(0xfff3),
+    notify: u(0xfff4),
+    namePrefixes: ["Sunset", "MeRGBW"],
+    // Ask for status; a MeRGBW lamp answers on FFF4 with a frame starting 0x56 0x00.
+    probe: mergbwFrame(0x00),
+    probeReply: (bytes) => bytes[0] === 0x56 && bytes[1] === 0x00,
+    // The lamp ignores color/brightness while off, and wakes at its last brightness,
+    // so dim to 1% before switching off to avoid a bright flash next time.
+    offPrelude: () => mergbwFrame(0x05, [1]),
+    power: (on) => mergbwFrame(0x01, [on ? 1 : 0]),
+    color: (r, g, b) => mergbwFrame(0x03, [clamp(r), clamp(g), clamp(b)]),
+    brightness: (pct) => mergbwFrame(0x05, [clamp(pct, 1, 100)]),
+    effect: (code) => mergbwFrame(0x06, [code]),
+    effects: [
+      ["Fantasy", 0x80], ["Green prairie", 0x81], ["Forest", 0x82], ["Sunrise", 0x83],
+      ["Ghost", 0x84], ["Midsummer", 0x85], ["Tropical twilight", 0x86], ["Disco", 0x87],
+      ["Alarm", 0x88], ["Aurora", 0x89], ["Scene 0x8A", 0x8a], ["Savanna", 0x8b],
+      ["Lake Placid", 0x8c], ["Neon", 0x8d], ["Sundowner", 0x8e], ["Blue star", 0x8f],
+      ["Red rose", 0x90], ["Scene 0x91", 0x91], ["Scene 0x92", 0x92], ["Autumn", 0x93],
+    ],
+  },
   {
     id: "elk",
     name: "ELK-BLEDOM / MELK / duoCo / Lotus",
@@ -47,7 +81,7 @@ export const PROTOCOLS = [
 export const ALL_SERVICES = [
   ...new Set([
     ...PROTOCOLS.map((p) => p.service),
-    u(0xffe0), u(0xffe5), u(0xfff0), u(0xffd0), u(0xffd5), u(0xee01), u(0xae00),
+    u(0x3519), u(0xffe0), u(0xffe5), u(0xfff0), u(0xffd0), u(0xffd5), u(0xee01), u(0xae00),
     u(0x1800), u(0x1801), u(0x180a),
   ]),
 ];

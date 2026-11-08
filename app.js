@@ -52,16 +52,19 @@ async function pump() {
   writing = true;
   try {
     while (pending.size) {
-      const [key, bytes] = pending.entries().next().value;
+      const [key, value] = pending.entries().next().value;
       pending.delete(key);
-      log("→ " + bytesToHex(bytes));
-      if (state.demo || !state.char) { await new Promise((r) => setTimeout(r, 20)); continue; }
-      const data = new Uint8Array(bytes);
-      try {
-        if (state.char.properties.writeWithoutResponse) await state.char.writeValueWithoutResponse(data);
-        else await state.char.writeValueWithResponse(data);
-      } catch (e) { log("write failed: " + e.message); }
-      await new Promise((r) => setTimeout(r, 25));
+      // A value is either one frame or a list of frames that must go out in order.
+      for (const bytes of Array.isArray(value[0]) ? value : [value]) {
+        log("→ " + bytesToHex(bytes));
+        if (state.demo || !state.char) { await new Promise((r) => setTimeout(r, 20)); continue; }
+        const data = new Uint8Array(bytes);
+        try {
+          if (state.char.properties.writeWithoutResponse) await state.char.writeValueWithoutResponse(data);
+          else await state.char.writeValueWithResponse(data);
+        } catch (e) { log("write failed: " + e.message); }
+        await new Promise((r) => setTimeout(r, 25));
+      }
     }
   } finally { writing = false; }
 }
@@ -83,7 +86,10 @@ function applyBrightness() {
 }
 function setPower(on) {
   state.on = on;
-  if (state.proto) send("power", state.proto.power(on));
+  if (state.proto) {
+    const pre = !on && state.proto.offPrelude ? [state.proto.offPrelude()] : [];
+    send("power", [...pre, state.proto.power(on)]);
+  }
   if (on) { applyColor(); applyBrightness(); }
   renderPower();
 }
@@ -124,7 +130,13 @@ async function attach(device) {
   const uuids = services.map((s) => s.uuid);
 
   const forced = store.get("proto:" + device.id, null);
-  const proto = PROTOCOLS.find((p) => p.id === forced) || PROTOCOLS.find((p) => uuids.includes(p.service));
+  const name = (device.name || "").toLowerCase();
+  const candidates = PROTOCOLS.filter((p) => uuids.includes(p.service));
+  let proto = PROTOCOLS.find((p) => p.id === forced)
+    || candidates.find((p) => p.namePrefixes.some((n) => name.startsWith(n.toLowerCase())));
+  // Several lamp families share the same service, so ask the lamp which one it is.
+  if (!proto && candidates.length > 1) proto = await probe(server, candidates);
+  proto ||= candidates.find((p) => !p.probe) || candidates[0];
   state.proto = null; state.char = null;
   if (proto) {
     try {
@@ -144,6 +156,28 @@ async function attach(device) {
     document.body.dataset.connected = "unknown";
     $("#advanced").open = true;
   }
+}
+
+async function probe(server, candidates) {
+  for (const p of candidates.filter((c) => c.probe)) {
+    try {
+      const svc = await server.getPrimaryService(p.service);
+      const notify = await svc.getCharacteristic(p.notify);
+      const write = await svc.getCharacteristic(p.write);
+      let matched = false;
+      const onValue = (e) => { if (p.probeReply(new Uint8Array(e.target.value.buffer))) matched = true; };
+      notify.addEventListener("characteristicvaluechanged", onValue);
+      await notify.startNotifications();
+      log("probe " + p.id + " → " + bytesToHex(p.probe));
+      await write.writeValue(new Uint8Array(p.probe));
+      for (let i = 0; i < 15 && !matched; i++) await new Promise((r) => setTimeout(r, 100));
+      notify.removeEventListener("characteristicvaluechanged", onValue);
+      await notify.stopNotifications().catch(() => {});
+      log("probe " + p.id + (matched ? ": match" : ": no reply"));
+      if (matched) return p;
+    } catch (e) { log("probe " + p.id + " failed: " + e.message); }
+  }
+  return null;
 }
 
 async function onDisconnect() {
