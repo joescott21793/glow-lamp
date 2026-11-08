@@ -237,8 +237,39 @@ body[data-tab="timers"] [data-panel="timers"] { display: block; }
 .effect[aria-pressed="true"] { background: var(--card-2); border-color: var(--lamp); }
 
 /* Timers */
+.alarm { margin-top: 16px; padding: 16px; border-radius: 18px; background: var(--card); border: 1px solid var(--stroke); }
+.alarm-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.alarm-head b { display: block; font-size: 17px; font-weight: 600; }
+.alarm-head .hint { margin: 0; font-size: 13px; }
+.alarm-body { margin-top: 14px; display: grid; gap: 12px; transition: opacity .2s; }
+.alarm.off .alarm-body { opacity: .35; pointer-events: none; }
+.alarm-body input[type="time"] { max-width: none; font-size: 22px; font-weight: 500; }
+.days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.day {
+  aspect-ratio: 1; max-height: 42px; border-radius: 50%; font-size: 14px; font-weight: 600;
+  background: var(--card); border: 1px solid var(--stroke); color: var(--muted); transition: background .2s, color .2s;
+}
+.day[aria-pressed="true"] { background: var(--lamp); border-color: transparent; color: #140904; }
+.switch { position: relative; width: 52px; height: 32px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.switch span {
+  position: absolute; inset: 0; border-radius: 999px; background: rgba(255, 255, 255, .14); transition: background .2s;
+}
+.switch span::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%;
+  background: #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .35); transition: transform .2s;
+}
+.switch input:checked + span { background: #4cd27a; }
+.switch input:checked + span::after { transform: translateX(20px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
+.alarm-body .label { margin: 4px 0 0; }
+.bright.small { padding: 8px 14px; background: transparent; }
+.fine-left { margin-top: 16px; font-size: 13px; color: var(--faint); line-height: 1.5; }
+.schedule-status { margin: 14px 0 0; font-size: 14px; color: var(--muted); text-align: center; min-height: 1.4em; }
+.schedule-status.ok { color: #7fe3a0; }
+.schedule-status.err { color: #ff8a8a; }
 .segmented {
-  display: grid; grid-template-columns: repeat(3, 1fr); padding: 4px; border-radius: 16px;
+  display: grid; grid-template-columns: repeat(4, 1fr); padding: 4px; border-radius: 16px;
   background: var(--card); border: 1px solid var(--stroke); margin-bottom: 24px;
 }
 .segmented button { padding: 10px 6px; border-radius: 12px; font-weight: 500; color: var(--muted); font-size: 15px; transition: background .2s, color .2s; }

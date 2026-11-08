@@ -96,7 +96,15 @@ function applyBrightness() {
 function setPower(on) {
   state.on = on;
   if (state.proto) {
-    const pre = !on && state.proto.offPrelude ? [state.proto.offPrelude()] : [];
+    let pre = [];
+    if (!on) {
+      const wake = scheduledWakeLook();
+      // The lamp wakes in whatever color/brightness it had when it went off, so if it's
+      // scheduled to turn itself on, leave it set to the chosen wake-up look.
+      // (Dimming first keeps the color switch from flashing.)
+      if (wake) pre = [state.proto.brightness(1), state.proto.color(...wake.rgb), state.proto.brightness(wake.bri)];
+      else if (state.proto.offPrelude) pre = [state.proto.offPrelude()];
+    }
     send("power", [...pre, state.proto.power(on)]);
   }
   if (on) { applyColor(); applyBrightness(); }
@@ -166,6 +174,7 @@ async function attach(device) {
       const svc = await server.getPrimaryService(proto.service);
       state.char = await svc.getCharacteristic(proto.write);
       state.proto = proto;
+      if (proto.notify) await listenForReplies(svc, proto);
     } catch (e) { log("protocol setup failed: " + e.message); }
   }
   await buildExplorer(services);
@@ -175,12 +184,32 @@ async function attach(device) {
     log(`connected: ${device.name || "?"} as ${state.proto.id}; write=${p.write} noResp=${p.writeWithoutResponse}; services ${uuids.map(shortUuid).join(" ")}`);
     document.body.dataset.connected = "yes";
     renderEffects();
+    renderScheduleSupport();
     setPower(true);
+    // Like the official app: set the lamp's clock, then ask for its status (which includes its schedule).
+    if (state.proto.syncTime) send("sync", [state.proto.syncTime(), state.proto.status()]);
   } else {
     setStatus("Connected, but this lamp's language is unknown. Open Advanced below.", true);
     document.body.dataset.connected = "unknown";
     openSettings();
   }
+}
+
+let replyChar = null;
+async function listenForReplies(svc, proto) {
+  try {
+    if (replyChar) replyChar.removeEventListener("characteristicvaluechanged", onReply);
+    replyChar = await svc.getCharacteristic(proto.notify);
+    replyChar.addEventListener("characteristicvaluechanged", onReply);
+    await replyChar.startNotifications();
+  } catch (e) { log("can't listen for lamp replies: " + e.message); replyChar = null; }
+}
+function onReply(e) {
+  const v = e.target.value;
+  const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  log("← " + bytesToHex(bytes));
+  const sched = state.proto?.parseSchedule?.(bytes);
+  if (sched) showLampSchedule(sched);
 }
 
 async function probe(server, candidates) {
@@ -220,6 +249,7 @@ function startDemo() {
   document.body.dataset.connected = "yes";
   setStatus("Demo mode", true);
   renderEffects();
+  renderScheduleSupport();
   setPower(true);
 }
 
@@ -377,17 +407,134 @@ function renderTimers() {
   renderWakeColors();
 }
 
+// ---------- built-in lamp schedule ----------
+const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ALL_DAYS = [true, true, true, true, true, true, true];
+let sched = store.get("sched", {
+  on: { enabled: false, h: 7, m: 0, days: [...ALL_DAYS] },
+  off: { enabled: true, h: 23, m: 0, days: [...ALL_DAYS] },
+});
+let awaitingSave = false;
+const pad = (n) => String(n).padStart(2, "0");
+const clockText = (h, m) => new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function daysText(days) {
+  const k = days.map((d) => (d ? 1 : 0)).join("");
+  if (k === "1111111") return "every day";
+  if (k === "1111100") return "weekdays";
+  if (k === "0000011") return "weekends";
+  if (k === "0000000") return "no days";
+  return days.map((d, i) => (d ? DAY_NAMES[i] : null)).filter(Boolean).join(", ");
+}
+
+function renderSchedule() {
+  for (const which of ["on", "off"]) {
+    const a = sched[which];
+    $(`#${which}Enabled`).checked = a.enabled;
+    $(`#${which}Enabled`).closest(".alarm").classList.toggle("off", !a.enabled);
+    $(`#${which}Time`).value = `${pad(a.h)}:${pad(a.m)}`;
+    const box = $(`#${which}Days`);
+    box.innerHTML = "";
+    a.days.forEach((on, i) => {
+      const b = document.createElement("button");
+      b.className = "day"; b.textContent = DAY_LETTERS[i];
+      b.setAttribute("aria-label", DAY_NAMES[i]);
+      b.setAttribute("aria-pressed", String(on));
+      b.onclick = () => { a.days[i] = !a.days[i]; b.setAttribute("aria-pressed", String(a.days[i])); };
+      box.append(b);
+    });
+  }
+}
+function readScheduleInputs() {
+  for (const which of ["on", "off"]) {
+    const [h, m] = ($(`#${which}Time`).value || "00:00").split(":").map(Number);
+    Object.assign(sched[which], { enabled: $(`#${which}Enabled`).checked, h, m });
+  }
+}
+function setScheduleStatus(text, kind = "") {
+  const el = $("#scheduleStatus");
+  el.textContent = text; el.className = "schedule-status " + kind;
+}
+function describeSchedule(s) {
+  const part = (label, a) => (a.enabled ? `${label} ${clockText(a.h, a.m)}, ${daysText(a.days)}` : `${label}: not set`);
+  return `${part("On", s.on)} · ${part("Off", s.off)}`;
+}
+// Color + brightness the lamp should wake up in, if its built-in "turn on" is set.
+function scheduledWakeLook() {
+  if (!state.proto?.timer || !state.proto.brightness || !sched.on.enabled) return null;
+  return { rgb: sched.onColor || [255, 170, 80], bri: sched.onBri || 80 };
+}
+
+// The lamp told us what schedule it has saved.
+function showLampSchedule(s) {
+  // The lamp doesn't store a color, so keep the one picked in Glow.
+  sched = { ...sched, on: s.on, off: s.off };
+  store.set("sched", sched);
+  renderSchedule();
+  if (awaitingSave) { awaitingSave = false; setScheduleStatus("✓ Saved on the lamp. " + describeSchedule(s), "ok"); }
+  else setScheduleStatus("On the lamp now: " + describeSchedule(s));
+}
+function renderScheduleSupport() {
+  const ok = !!state.proto?.timer;
+  $("#scheduleBox").hidden = !ok;
+  $("#scheduleUnsupported").hidden = ok;
+}
+$("#onBri").value = sched.onBri || 80;
+$("#onBriVal").textContent = (sched.onBri || 80) + "%";
+$("#onBri").oninput = (e) => { sched.onBri = +e.target.value; $("#onBriVal").textContent = e.target.value + "%"; store.set("sched", sched); };
+for (const which of ["on", "off"]) {
+  $(`#${which}Enabled`).onchange = (e) => { sched[which].enabled = e.target.checked; e.target.closest(".alarm").classList.toggle("off", !e.target.checked); };
+}
+$("#scheduleSave").onclick = () => {
+  if (!state.proto?.timer) return;
+  readScheduleInputs();
+  for (const which of ["on", "off"]) {
+    if (sched[which].enabled && !sched[which].days.some(Boolean)) {
+      setScheduleStatus(`Pick at least one day to turn ${which}.`, "err"); return;
+    }
+  }
+  store.set("sched", sched);
+  // Set the clock first so the lamp's idea of "7:00" matches yours.
+  send("schedule", [state.proto.syncTime(), state.proto.timer(sched.on, sched.off), state.proto.status()]);
+  // Put the lamp in its wake-up look now, so it wakes in it even if it turns itself off tonight.
+  const wake = scheduledWakeLook();
+  if (wake) {
+    if (state.on) { cancelFade(); setColor(wake.rgb); setBri(wake.bri); }
+    else {
+      // The lamp ignores color while off: wake it at 1%, set the look, switch off again.
+      const p = state.proto;
+      send("wakeLook", [p.power(true), p.brightness(1), p.color(...wake.rgb), p.brightness(wake.bri), p.power(false)]);
+      state.hsv = rgbToHsv(wake.rgb); state.hsv.v = 1; state.bri = wake.bri; renderColor();
+    }
+  }
+  if (state.demo) { setScheduleStatus("Demo mode: " + describeSchedule(sched)); return; }
+  awaitingSave = true;
+  setScheduleStatus("Saving…");
+  setTimeout(() => {
+    if (awaitingSave) {
+      awaitingSave = false;
+      setScheduleStatus("Sent. The lamp didn't confirm, so check it turns on/off as expected. " + describeSchedule(sched));
+    }
+  }, 3000);
+};
+
 const WAKE_PRESETS = [
   ["Warm white", [255, 170, 80]], ["Daylight", [255, 255, 255]], ["Golden", [255, 140, 20]],
   ["Sunset orange", [255, 70, 10]], ["Rose", [255, 40, 80]], ["Lavender", [150, 60, 255]],
   ["Ocean", [0, 90, 255]], ["Forest", [20, 200, 40]],
 ];
 function renderWakeColors() {
-  const box = $("#wakeColors");
-  const chosen = store.get("wakeColor", "natural");
+  renderSwatches($("#wakeColors"), store.get("wakeColor", "natural"),
+    (v) => { store.set("wakeColor", v); renderWakeColors(); }, { natural: true, nameEl: $("#wakeColorName") });
+  renderSwatches($("#onColors"), sched.onColor || WAKE_PRESETS[0][1],
+    (v) => { sched.onColor = v; store.set("sched", sched); renderWakeColors(); });
+}
+
+// A row of color circles: presets, saved colors, and "+" for any color.
+function renderSwatches(box, chosen, onPick, { natural = false, nameEl = null } = {}) {
   const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.every((x, i) => x === b[i]);
   const favs = store.get("favs", []).map((rgb) => ["Saved color", rgb]);
-  const options = [["Natural sunrise (red → warm white)", "natural"], ...WAKE_PRESETS, ...favs];
+  const options = [...(natural ? [["Natural sunrise (red → warm white)", "natural"]] : []), ...WAKE_PRESETS, ...favs];
   // A color picked with "Any color…" that isn't in the list still gets its own swatch.
   if (chosen !== "natural" && !options.some(([, v]) => same(v, chosen))) options.push(["Your color", chosen]);
   box.innerHTML = "";
@@ -403,21 +550,18 @@ function renderWakeColors() {
     b.setAttribute("aria-pressed", String(on));
     b.setAttribute("aria-label", name);
     b.title = name;
-    b.onclick = () => { store.set("wakeColor", value); renderWakeColors(); };
+    b.onclick = () => onPick(value);
     box.append(b);
   }
   // "Any color…" opens the phone's own color picker.
   const any = document.createElement("label");
   any.className = "swatch any"; any.title = "Any color…";
-  any.innerHTML = `<span aria-hidden="true">+</span><input type="color" aria-label="Pick any wake-up color">`;
+  any.innerHTML = `<span aria-hidden="true">+</span><input type="color" aria-label="Pick any color">`;
   const input = any.querySelector("input");
   input.value = chosen === "natural" ? "#ffaa50" : hex(chosen);
-  input.onchange = () => {
-    const v = input.value.match(/[0-9a-f]{2}/gi).map((h) => parseInt(h, 16));
-    store.set("wakeColor", v); renderWakeColors();
-  };
+  input.onchange = () => onPick(input.value.match(/[0-9a-f]{2}/gi).map((h) => parseInt(h, 16)));
   box.append(any);
-  $("#wakeColorName").textContent = chosenName;
+  if (nameEl) nameEl.textContent = chosenName;
 }
 let wakeLock = null;
 async function requestWakeLock() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
@@ -614,10 +758,12 @@ showTab(store.get("tab", "color"));
 function showTimer(name) {
   document.querySelectorAll("[data-timer]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.timer === name)));
   document.querySelectorAll("[data-timer-panel]").forEach((p) => (p.hidden = p.dataset.timerPanel !== name));
+  $("#phoneNote").hidden = name === "schedule";
   store.set("timerTab", name);
 }
 document.querySelectorAll("[data-timer]").forEach((b) => (b.onclick = () => showTimer(b.dataset.timer)));
-showTimer(store.get("timerTab", "sunset"));
+showTimer(store.get("timerTab", "schedule"));
+renderSchedule();
 
 // Settings sheet
 function openSettings() { const d = $("#advanced"); if (d.showModal) { if (!d.open) d.showModal(); } else d.setAttribute("open", ""); }

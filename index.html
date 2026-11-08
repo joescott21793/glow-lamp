@@ -98,12 +98,58 @@
     <!-- Timers -->
     <section class="panel" data-panel="timers">
       <div class="segmented" role="tablist" aria-label="Timer type">
-        <button role="tab" data-timer="sunset" aria-selected="true">Sunset</button>
+        <button role="tab" data-timer="schedule" aria-selected="true">Schedule</button>
+        <button role="tab" data-timer="sunset" aria-selected="false">Sunset</button>
         <button role="tab" data-timer="sleep" aria-selected="false">Sleep</button>
         <button role="tab" data-timer="wake" aria-selected="false">Wake-up</button>
       </div>
 
-      <div class="timer" data-timer-panel="sunset">
+      <div class="timer" data-timer-panel="schedule">
+        <h2>Lamp schedule</h2>
+        <p class="hint">Saved on the lamp itself, so it turns on and off by itself, even when your phone is off or far away.</p>
+
+        <div id="scheduleBox">
+          <div class="alarm">
+            <div class="alarm-head">
+              <div><b>Turn on</b></div>
+              <label class="switch"><input type="checkbox" id="onEnabled" aria-label="Turn on automatically"><span></span></label>
+            </div>
+            <div class="alarm-body">
+              <input type="time" id="onTime" value="07:00" aria-label="Turn on time">
+              <div class="days" id="onDays" role="group" aria-label="Turn on days"></div>
+              <p class="label">Color</p>
+              <div class="swatches" id="onColors"></div>
+              <label class="bright small">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="sun-s"><circle cx="12" cy="12" r="4" /></svg>
+                <input id="onBri" type="range" min="5" max="100" value="80" aria-label="Turn-on brightness">
+                <output id="onBriVal">80%</output>
+              </label>
+            </div>
+          </div>
+
+          <div class="alarm">
+            <div class="alarm-head">
+              <div><b>Turn off</b></div>
+              <label class="switch"><input type="checkbox" id="offEnabled" aria-label="Turn off automatically"><span></span></label>
+            </div>
+            <div class="alarm-body">
+              <input type="time" id="offTime" value="23:00" aria-label="Turn off time">
+              <div class="days" id="offDays" role="group" aria-label="Turn off days"></div>
+            </div>
+          </div>
+
+          <p class="hint fine-left">The lamp always wakes up in the color it had when it last turned off. Saving sets it to your
+            turn-on color now, and Glow switches it back to that color whenever Glow turns it off. If you change the color
+            and the lamp then turns itself off, it will come back on in that newer color.</p>
+          <button id="scheduleSave" class="btn-primary">Save to lamp</button>
+          <p class="schedule-status" id="scheduleStatus"></p>
+        </div>
+        <div id="scheduleUnsupported" class="notice" hidden>
+          This lamp type doesn't have a built-in schedule that Glow knows how to set.
+        </div>
+      </div>
+
+      <div class="timer" data-timer-panel="sunset" hidden>
         <h2>Sunset</h2>
         <p class="hint">Drifts slowly through sunset colors, dims down, then turns the lamp off.</p>
         <p class="label">Style</p>
@@ -138,10 +184,11 @@
         <button id="sunriseGo" class="btn-primary">Set wake-up</button>
       </div>
 
-      <div class="notice timer-note">
-        <b>Your phone runs the timer, not the lamp.</b>
+      <div class="notice timer-note" id="phoneNote">
+        <b>Your phone runs this one, not the lamp.</b>
         Until it finishes, leave Glow open on screen and keep your phone in the same room as the lamp,
-        ideally plugged in. If you close Glow, switch apps or your phone locks, the timer stops.
+        ideally plugged in. If you close Glow, switch apps or your phone locks, it stops.
+        For plain on/off times, use <b>Schedule</b> instead: the lamp runs that by itself.
       </div>
     </section>
   </main>

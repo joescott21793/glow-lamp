@@ -13,6 +13,10 @@ function mergbwFrame(cmd, payload = []) {
   return [...body, ~s & 0xff];
 }
 
+// Day bitmask used by the lamp: Monday = bit 0 … Sunday = bit 6.
+export const daysToMask = (days) => days.reduce((m, on, i) => m | (on ? 1 << i : 0), 0);
+export const maskToDays = (mask) => [0, 1, 2, 3, 4, 5, 6].map((i) => !!(mask & (1 << i)));
+
 export const PROTOCOLS = [
   {
     id: "mergbw",
@@ -31,6 +35,26 @@ export const PROTOCOLS = [
     color: (r, g, b) => mergbwFrame(0x03, [clamp(r), clamp(g), clamp(b)]),
     brightness: (pct) => mergbwFrame(0x05, [clamp(pct, 1, 100)]),
     effect: (code) => mergbwFrame(0x06, [code]),
+    // Built-in on/off schedule, stored on the lamp. Format from the meRGBW app
+    // (see github.com/launxy/MeRGBW-Linux, PROTOCOL.md).
+    status: () => mergbwFrame(0x00),
+    syncTime: (d = new Date()) => {
+      const y = d.getFullYear();
+      const isoWeekday = d.getDay() || 7; // 1 = Monday … 7 = Sunday
+      return mergbwFrame(0x0c, [y >> 8, y & 0xff, d.getMonth() + 1, d.getDate(),
+        d.getHours(), d.getMinutes(), d.getSeconds(), isoWeekday]);
+    },
+    // on/off: { enabled, h, m, days: [mon, tue, wed, thu, fri, sat, sun] }
+    timer: (on, off) => mergbwFrame(0x0a, [
+      on.enabled ? 1 : 0, on.h, on.m, daysToMask(on.days),
+      off.enabled ? 1 : 0, off.h, off.m, daysToMask(off.days),
+    ]),
+    // Status reply: 56 00 FF 0F <power> <bri> <on: set h m week> <off: set h m week> <checksum>
+    parseSchedule: (b) => {
+      if (b.length < 14 || (b[0] !== 0x56 && b[0] !== 0x55) || b[1] !== 0x00) return null;
+      const alarm = (i) => ({ enabled: b[i] === 1, h: b[i + 1], m: b[i + 2], days: maskToDays(b[i + 3]) });
+      return { power: b[4] === 1, on: alarm(6), off: alarm(10) };
+    },
     effects: [
       ["Fantasy", 0x80], ["Green prairie", 0x81], ["Forest", 0x82], ["Sunrise", 0x83],
       ["Ghost", 0x84], ["Midsummer", 0x85], ["Tropical twilight", 0x86], ["Disco", 0x87],

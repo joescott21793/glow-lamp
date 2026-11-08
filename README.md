@@ -9,6 +9,7 @@ You can add it to your home screen and it works like an app.
 - Smooth color wheel and brightness slider (no lag while you drag)
 - One-tap scenes: Sunset, Golden hour, Dusk, Candle, Night light…
 - Saved favorite colors (long-press one to remove it)
+- **Lamp schedule** (MeRGBW lamps): on/off times and repeat days saved on the lamp itself, with a chosen wake-up color
 - **Sunset fade**: slowly dims to a deep red, then turns off
 - **Sunrise wake-up**: slowly brightens from red to warm white
 - **Sleep timer**: turns the lamp off after N minutes
