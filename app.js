@@ -170,7 +170,7 @@ async function attach(device) {
   }
   await buildExplorer(services);
   if (state.proto) {
-    setStatus("Connected · " + (device.name || "lamp") + " · " + state.proto.name, true);
+    setStatus(device.name || "Connected", true);
     const p = state.char.properties;
     log(`connected: ${device.name || "?"} as ${state.proto.id}; write=${p.write} noResp=${p.writeWithoutResponse}; services ${uuids.map(shortUuid).join(" ")}`);
     document.body.dataset.connected = "yes";
@@ -179,7 +179,7 @@ async function attach(device) {
   } else {
     setStatus("Connected, but this lamp's language is unknown. Open Advanced below.", true);
     document.body.dataset.connected = "unknown";
-    $("#advanced").open = true;
+    openSettings();
   }
 }
 
@@ -218,37 +218,158 @@ function startDemo() {
   state.demo = true;
   state.proto = PROTOCOLS[0];
   document.body.dataset.connected = "yes";
-  setStatus("Demo mode · no lamp (commands are only logged)", true);
+  setStatus("Demo mode", true);
   renderEffects();
   setPower(true);
 }
 
 // ---------- fades & timers ----------
-let fade = null;
-function startFade({ toRgb, toBri, minutes, thenOff }) {
-  cancelFade();
-  const from = { rgb: hsvToRgb(state.hsv), bri: state.bri };
-  const t0 = Date.now(), dur = minutes * 60000;
-  const tick = () => {
-    const p = Math.min(1, (Date.now() - t0) / dur);
-    const e = p * p * (3 - 2 * p);
-    const rgb = from.rgb.map((c, i) => Math.round(c + (toRgb[i] - c) * e));
-    state.hsv = rgbToHsv(rgb); state.hsv.v = 1;
-    state.bri = Math.max(1, Math.round(from.bri + (toBri - from.bri) * e));
-    applyColor(); applyBrightness(); renderColor();
-    const left = Math.ceil((dur - (Date.now() - t0)) / 60000);
-    $("#fadeStatus").textContent = p < 1 ? `Fading… ${left} min left` : "";
-    if (p >= 1) { cancelFade(); if (thenOff) setPower(false); }
-  };
-  fade = setInterval(tick, 1000);
-  tick();
-  $("#fadeCancel").hidden = false;
+// A "job" is one running timer. Only one runs at a time.
+//   frames: list of {rgb, bri} spread evenly from startAt to endAt (empty = leave the color alone)
+//   thenOff: switch the lamp off at endAt
+const SUNSET_STYLES = [
+  ["Classic", "Orange → red → ember", [[255, 120, 20, 90], [255, 60, 5, 60], [220, 20, 0, 30], [140, 8, 0, 1]]],
+  ["Golden hour", "Gold → amber → glow", [[255, 190, 60, 90], [255, 130, 20, 60], [255, 80, 0, 25], [180, 40, 0, 1]]],
+  ["Pink dusk", "Peach → pink → violet", [[255, 140, 90, 90], [255, 60, 110, 60], [170, 40, 200, 25], [60, 10, 120, 1]]],
+  ["Tropical", "Coral → magenta → indigo", [[255, 100, 60, 90], [240, 30, 120, 60], [110, 20, 200, 25], [20, 10, 140, 1]]],
+  ["Fire", "Bright orange → deep red", [[255, 90, 0, 100], [255, 40, 0, 60], [255, 10, 0, 25], [120, 0, 0, 1]]],
+  ["Twilight", "Sunset → blue hour", [[255, 110, 30, 85], [230, 50, 80, 55], [70, 40, 220, 25], [10, 20, 120, 1]]],
+].map(([name, desc, frames]) => ({ name, desc, frames: frames.map(([r, g, b, bri]) => ({ rgb: [r, g, b], bri })) }));
+
+const SUNRISE_FRAMES = [[120, 5, 0, 1], [255, 40, 0, 15], [255, 110, 20, 45], [255, 170, 80, 75], [255, 215, 160, 100]]
+  .map(([r, g, b, bri]) => ({ rgb: [r, g, b], bri }));
+
+let job = null, jobTimer = null;
+const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const fmtLeft = (ms) => { const m = Math.max(0, Math.ceil(ms / 60000)); return m >= 60 ? `${Math.floor(m / 60)} hr ${m % 60} min` : `${m} min`; };
+const lerp = (a, b, t) => a + (b - a) * t;
+// Next time today (or tomorrow) that the clock shows "HH:MM".
+function nextClock(hhmm) {
+  const [h, m] = hhmm.split(":").map(Number);
+  const d = new Date(); d.setHours(h, m, 0, 0);
+  if (d.getTime() <= Date.now() + 30000) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
+function startJob(j) {
+  cancelJob();
+  job = j;
+  if (j.frames.length) j.frames = [{ rgb: hsvToRgb(state.hsv), bri: state.bri, current: true }, ...j.frames];
+  jobTimer = setInterval(tickJob, 1000);
+  tickJob();
   requestWakeLock();
 }
-function cancelFade() {
-  clearInterval(fade); fade = null;
-  $("#fadeStatus").textContent = ""; $("#fadeCancel").hidden = true;
+function tickJob() {
+  if (!job) return;
+  const now = Date.now();
+  if (now < job.startAt) { showJob(`starts at ${fmtTime(job.startAt)}`); return; }
+  if (job.frames.length) {
+    if (job.frames[0].current && !job.begun) {
+      // A scheduled wake-up begins from its own first color, not whatever the lamp shows now.
+      if (job.kind === "sunrise") job.frames.shift();
+      job.begun = true;
+      if (!state.on) setPower(true);
+    }
+    const p = Math.min(1, (now - job.startAt) / (job.endAt - job.startAt));
+    const seg = p * (job.frames.length - 1), i = Math.min(job.frames.length - 2, Math.floor(seg)), t = seg - i;
+    const a = job.frames[i], b = job.frames[i + 1] || a;
+    const rgb = a.rgb.map((c, k) => Math.round(lerp(c, b.rgb[k], t)));
+    const bri = Math.max(1, Math.round(lerp(a.bri, b.bri, t)));
+    if (hex(rgb) !== hex(hsvToRgb(state.hsv)) || bri !== state.bri) {
+      state.hsv = rgbToHsv(rgb); state.hsv.v = 1; state.bri = bri;
+      applyColor(); applyBrightness(); renderColor();
+    }
+  } else if (job.endAt - now < 60000 && state.on) {
+    // Sleep timer: soften the last minute instead of snapping off.
+    if (!job.fromBri) job.fromBri = state.bri;
+    const b = Math.max(1, Math.round(job.fromBri * ((job.endAt - now) / 60000)));
+    if (b !== state.bri) { state.bri = b; applyBrightness(); renderColor(); }
+  }
+  if (now >= job.endAt) {
+    const { thenOff, fromBri } = job;
+    cancelJob();
+    if (fromBri) state.bri = fromBri; // remember the normal brightness for next time
+    if (thenOff) setPower(false);
+    return;
+  }
+  showJob(job.thenOff ? `off at ${fmtTime(job.endAt)} · ${fmtLeft(job.endAt - now)} left` : `full brightness at ${fmtTime(job.endAt)}`);
+}
+function showJob(detail) {
+  $("#jobBanner").hidden = false;
+  $("#jobTitle").textContent = job.title;
+  $("#jobDetail").textContent = detail;
+}
+function cancelJob() {
+  // Cancelling a sleep timer during its last-minute dim puts the brightness back.
+  if (job?.fromBri && job.endAt > Date.now()) { state.bri = job.fromBri; applyBrightness(); renderColor(); }
+  clearInterval(jobTimer); jobTimer = null; job = null;
+  $("#jobBanner").hidden = true;
   releaseWakeLock();
+}
+// Picking a color by hand stops a sunset/sunrise, but leaves a sleep timer running.
+function cancelFade() { if (job && job.kind !== "sleep") cancelJob(); }
+
+function startSleep(endAt) {
+  startJob({ kind: "sleep", title: "🌙 Sleep timer", startAt: Date.now(), endAt, frames: [], thenOff: true });
+}
+
+// Little helper: a row of single-choice chips.
+function chipGroup(box, options, initial, key) {
+  let value = store.get(key, initial);
+  box.innerHTML = "";
+  for (const [label, v] of options) {
+    const b = document.createElement("button");
+    b.className = "chip"; b.textContent = label;
+    b.setAttribute("aria-pressed", String(v === value));
+    b.onclick = () => {
+      value = v; store.set(key, v);
+      box.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c === b)));
+    };
+    box.append(b);
+  }
+  return () => value;
+}
+
+function renderTimers() {
+  const sleepBox = $("#sleepIn");
+  for (const [label, min] of [["15 min", 15], ["30 min", 30], ["45 min", 45], ["1 hr", 60], ["1½ hr", 90], ["2 hr", 120]]) {
+    const b = document.createElement("button");
+    b.className = "chip"; b.textContent = label;
+    b.onclick = () => startSleep(Date.now() + min * 60000);
+    sleepBox.append(b);
+  }
+  $("#sleepAt").value = store.get("sleepAt", "23:00");
+  $("#sleepAtGo").onclick = () => { store.set("sleepAt", $("#sleepAt").value); startSleep(nextClock($("#sleepAt").value)); };
+
+  let style = store.get("sunsetStyle", 0);
+  const styles = $("#sunsetStyles");
+  SUNSET_STYLES.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.className = "style";
+    b.style.setProperty("--g", `linear-gradient(90deg, ${s.frames.map((f) => hex(f.rgb)).join(", ")})`);
+    b.innerHTML = `<i></i><b>${s.name}</b><span>${s.desc}</span>`;
+    b.setAttribute("aria-pressed", String(i === style));
+    b.onclick = () => {
+      style = i; store.set("sunsetStyle", i);
+      styles.querySelectorAll(".style").forEach((c) => c.setAttribute("aria-pressed", String(c === b)));
+    };
+    styles.append(b);
+  });
+  const sunsetLen = chipGroup($("#sunsetLen"), [["10 min", 10], ["20 min", 20], ["30 min", 30], ["45 min", 45], ["1 hr", 60]], 30, "sunsetLen");
+  $("#sunsetGo").onclick = () => {
+    const s = SUNSET_STYLES[style];
+    startJob({ kind: "sunset", title: "🌇 " + s.name + " sunset", startAt: Date.now(), endAt: Date.now() + sunsetLen() * 60000,
+      frames: s.frames.map((f) => ({ ...f })), thenOff: true });
+  };
+
+  const sunriseLen = chipGroup($("#sunriseLen"), [["10 min", 10], ["20 min", 20], ["30 min", 30], ["45 min", 45]], 30, "sunriseLen");
+  $("#wakeAt").value = store.get("wakeAt", "07:00");
+  $("#sunriseGo").onclick = () => {
+    store.set("wakeAt", $("#wakeAt").value);
+    const endAt = nextClock($("#wakeAt").value);
+    const startAt = Math.max(Date.now(), endAt - sunriseLen() * 60000);
+    startJob({ kind: "sunrise", title: "🌅 Wake-up", startAt, endAt, frames: SUNRISE_FRAMES.map((f) => ({ ...f })), thenOff: false });
+  };
 }
 let wakeLock = null;
 async function requestWakeLock() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
@@ -262,7 +383,7 @@ function log(line) {
 }
 function renderPower() {
   $("#power").setAttribute("aria-pressed", String(state.on));
-  $("#power").querySelector("span").textContent = state.on ? "On" : "Off";
+  $("#powerLabel").textContent = state.on ? "On" : "Off";
   document.body.dataset.on = state.on ? "yes" : "no";
 }
 function renderColor() {
@@ -278,45 +399,57 @@ function renderEffects() {
   box.innerHTML = "";
   for (const [name, code] of state.proto?.effects || []) {
     const b = document.createElement("button");
-    b.className = "chip"; b.textContent = name;
+    b.className = "effect"; b.textContent = name;
     b.onclick = () => {
       cancelFade();
       const sp = +$("#speed").value;
       send("color", state.proto.effect(code, sp));
       if (state.proto.speed) send("speed", state.proto.speed(sp));
+      box.querySelectorAll(".effect").forEach((e) => e.setAttribute("aria-pressed", String(e === b)));
     };
     box.append(b);
   }
-  $("#protoName").textContent = state.proto ? state.proto.name : "none";
+  // Only show the speed slider when this lamp type understands speed.
+  const p = state.proto;
+  $("#speed").closest(".field").hidden = !(p && (p.speed || p.effect.length > 1));
+  $("#protoName").textContent = p ? p.name : "none";
 }
 function renderScenes() {
   const box = $("#scenes");
   for (const [name, rgb] of SCENES) {
     const b = document.createElement("button");
     b.className = "scene"; b.style.setProperty("--c", hex(rgb));
-    b.innerHTML = `<i></i><span>${name}</span>`;
+    b.innerHTML = `<span>${name}</span>`;
     b.onclick = () => { cancelFade(); setColor(rgb); };
     box.append(b);
   }
 }
+let editingFavs = false;
 function renderFavs() {
   const favs = store.get("favs", []);
   const box = $("#favs");
   box.innerHTML = "";
+  box.classList.toggle("editing", editingFavs);
   favs.forEach((rgb, i) => {
     const b = document.createElement("button");
-    b.className = "fav"; b.style.background = hex(rgb); b.title = "Tap to use · long-press to remove";
-    b.setAttribute("aria-label", "Saved color " + hex(rgb));
-    let t;
-    b.onpointerdown = () => { t = setTimeout(() => { favs.splice(i, 1); store.set("favs", favs); renderFavs(); t = null; }, 600); };
-    b.onpointerup = () => { if (t) { clearTimeout(t); cancelFade(); setColor(rgb); } };
-    b.onpointerleave = () => clearTimeout(t);
+    b.className = "fav"; b.style.background = hex(rgb);
+    b.setAttribute("aria-label", (editingFavs ? "Delete saved color " : "Use saved color ") + hex(rgb));
+    b.onclick = () => {
+      if (editingFavs) { favs.splice(i, 1); store.set("favs", favs); if (!favs.length) editingFavs = false; renderFavs(); }
+      else { cancelFade(); setColor(rgb); }
+    };
     box.append(b);
   });
-  const add = document.createElement("button");
-  add.className = "fav add"; add.textContent = "+"; add.setAttribute("aria-label", "Save current color");
-  add.onclick = () => { favs.push(hsvToRgb(state.hsv)); store.set("favs", favs.slice(-12)); renderFavs(); };
-  box.append(add);
+  if (!editingFavs) {
+    const add = document.createElement("button");
+    add.className = "fav add"; add.textContent = "+"; add.setAttribute("aria-label", "Save current color");
+    add.onclick = () => { favs.push(hsvToRgb(state.hsv)); store.set("favs", favs.slice(-12)); renderFavs(); };
+    box.append(add);
+  }
+  const edit = $("#favEdit");
+  edit.hidden = !favs.length;
+  edit.textContent = editingFavs ? "Done" : "Edit";
+  $("#favHint").hidden = !editingFavs;
 }
 
 // ---------- color wheel ----------
@@ -325,7 +458,9 @@ const ctx = wheel.getContext("2d");
 let wheelImg = null;
 function buildWheel() {
   const dpr = window.devicePixelRatio || 1;
-  const size = wheel.clientWidth * dpr;
+  const size = Math.round(wheel.clientWidth * dpr);
+  if (!size) return; // hidden (another tab is showing)
+  if (wheelImg && wheelImg.width === size) { drawWheel(); return; }
   wheel.width = wheel.height = size;
   const img = ctx.createImageData(size, size);
   const r = size / 2;
@@ -413,24 +548,42 @@ $("#connectAll").onclick = () => connect(true);
 $("#demo").onclick = startDemo;
 $("#power").onclick = () => { cancelFade(); setPower(!state.on); };
 $("#bri").oninput = (e) => { cancelFade(); setBri(+e.target.value); };
-$("#fadeCancel").onclick = cancelFade;
+$("#fadeCancel").onclick = cancelJob;
+$("#favEdit").onclick = () => { editingFavs = !editingFavs; renderFavs(); };
+
+// Bottom tabs
+function showTab(name) {
+  document.body.dataset.tab = name;
+  document.querySelectorAll(".tabs button").forEach((b) =>
+    b.dataset.tab === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
+  store.set("tab", name);
+  if (name === "color") requestAnimationFrame(buildWheel);
+}
+document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => { showTab(b.dataset.tab); scrollTo({ top: 0, behavior: "smooth" }); }));
+showTab(store.get("tab", "color"));
+
+// Timer type switcher (Sunset / Sleep / Wake-up)
+function showTimer(name) {
+  document.querySelectorAll("[data-timer]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.timer === name)));
+  document.querySelectorAll("[data-timer-panel]").forEach((p) => (p.hidden = p.dataset.timerPanel !== name));
+  store.set("timerTab", name);
+}
+document.querySelectorAll("[data-timer]").forEach((b) => (b.onclick = () => showTimer(b.dataset.timer)));
+showTimer(store.get("timerTab", "sunset"));
+
+// Settings sheet
+function openSettings() { const d = $("#advanced"); if (d.showModal) { if (!d.open) d.showModal(); } else d.setAttribute("open", ""); }
+$("#settingsBtn").onclick = openSettings;
+$("#advanced").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 $("#writeMode").value = store.get("writeMode", "auto");
 $("#writeMode").onchange = (e) => {
   store.set("writeMode", e.target.value);
   log("write mode: " + e.target.value);
   if (state.proto) setPower(true);
 };
-$("#sunset").onclick = () => startFade({ toRgb: [255, 30, 0], toBri: 1, minutes: +$("#fadeMin").value, thenOff: true });
-$("#sunrise").onclick = () => {
-  state.hsv = rgbToHsv([255, 20, 0]); state.bri = 1;
-  if (!state.on) setPower(true);
-  startFade({ toRgb: [255, 200, 120], toBri: 100, minutes: +$("#fadeMin").value, thenOff: false });
-};
-$("#sleep").onclick = () => startFade({ toRgb: hsvToRgb(state.hsv), toBri: state.bri, minutes: +$("#fadeMin").value, thenOff: true });
-$("#fadeMin").oninput = (e) => ($("#fadeMinVal").textContent = e.target.value + " min");
 
 if (!navigator.bluetooth) showUnsupported();
-renderScenes(); renderFavs(); renderPower();
+renderScenes(); renderFavs(); renderPower(); renderTimers();
 new ResizeObserver(buildWheel).observe(wheel);
 renderColor();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
