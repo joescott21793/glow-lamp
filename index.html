@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Glow Lamp</title>
+  <meta name="description" content="A friendly Bluetooth controller for RGB sunset lamps.">
+  <meta name="theme-color" content="#14100e">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-connected="no" data-on="yes">
+  <div class="halo" aria-hidden="true"></div>
+  <main>
+    <header>
+      <h1>Glow</h1>
+      <p id="status" role="status">Not connected</p>
+    </header>
+
+    <section class="connect-card" id="connectCard">
+      <button id="connect" class="primary">Connect to lamp</button>
+      <button id="demo" class="ghost">Try without a lamp</button>
+      <div id="unsupported" class="note" hidden>
+        <strong>This browser can't talk to Bluetooth.</strong>
+        Use <b>Chrome</b> on Android, Windows, Mac or ChromeOS. On iPhone/iPad, open this page in the free
+        <b>Bluefy</b> browser app instead of Safari.
+        <br>Also close the meRGBW app first: a lamp can only talk to one app at a time.
+      </div>
+    </section>
+
+    <section class="controls">
+      <div class="top-row">
+        <button id="power" class="power" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8M6.3 6.3a8 8 0 1 0 11.4 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span>On</span></button>
+        <div class="swatch"><i></i><code id="hex">#FF7A1A</code></div>
+      </div>
+
+      <canvas id="wheel" aria-label="Color wheel. Drag to pick a color."></canvas>
+
+      <label class="slider">
+        <span>Brightness <output id="briVal">80%</output></span>
+        <input id="bri" type="range" min="1" max="100" value="80">
+      </label>
+
+      <h2>Scenes</h2>
+      <div id="scenes" class="scenes"></div>
+
+      <h2>Saved colors</h2>
+      <div id="favs" class="favs"></div>
+
+      <h2>Sunset &amp; sleep</h2>
+      <div class="card">
+        <label class="slider">
+          <span>Duration <output id="fadeMinVal">20 min</output></span>
+          <input id="fadeMin" type="range" min="1" max="60" value="20">
+        </label>
+        <div class="row">
+          <button id="sunset" class="chip">🌇 Sunset fade, then off</button>
+          <button id="sunrise" class="chip">🌅 Sunrise wake-up</button>
+          <button id="sleep" class="chip">🌙 Sleep timer</button>
+        </div>
+        <p class="hint"><span id="fadeStatus"></span> <button id="fadeCancel" class="link" hidden>Cancel</button></p>
+        <p class="hint">Keep this page open while a fade runs (the screen stays awake).</p>
+      </div>
+
+      <h2>Effects</h2>
+      <div class="card">
+        <label class="slider">
+          <span>Speed</span>
+          <input id="speed" type="range" min="1" max="100" value="50">
+        </label>
+        <div id="effects" class="row"></div>
+      </div>
+
+      <details id="advanced">
+        <summary>Advanced</summary>
+        <div class="card">
+          <label>Lamp language
+            <select id="protoSelect"><option value="">Auto-detect</option></select>
+          </label>
+          <p class="hint">Detected: <b id="protoName">none</b></p>
+          <label>Send raw bytes
+            <select id="chars"></select>
+          </label>
+          <div class="row">
+            <input id="raw" placeholder="7e 00 05 03 ff 00 00 00 ef" spellcheck="false">
+            <button id="rawSend" class="chip">Send</button>
+          </div>
+          <pre id="log" aria-label="Bluetooth log"></pre>
+        </div>
+      </details>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
