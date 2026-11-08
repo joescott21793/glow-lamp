@@ -368,8 +368,56 @@ function renderTimers() {
     store.set("wakeAt", $("#wakeAt").value);
     const endAt = nextClock($("#wakeAt").value);
     const startAt = Math.max(Date.now(), endAt - sunriseLen() * 60000);
-    startJob({ kind: "sunrise", title: "🌅 Wake-up", startAt, endAt, frames: SUNRISE_FRAMES.map((f) => ({ ...f })), thenOff: false });
+    const c = store.get("wakeColor", "natural");
+    // "natural" walks through sunrise colors; a chosen color just fades up from dark in that color.
+    const frames = c === "natural" ? SUNRISE_FRAMES.map((f) => ({ ...f }))
+      : [{ rgb: c, bri: 1 }, { rgb: c, bri: 35 }, { rgb: c, bri: 100 }];
+    startJob({ kind: "sunrise", title: "🌅 Wake-up", startAt, endAt, frames, thenOff: false });
   };
+  renderWakeColors();
+}
+
+const WAKE_PRESETS = [
+  ["Warm white", [255, 170, 80]], ["Daylight", [255, 255, 255]], ["Golden", [255, 140, 20]],
+  ["Sunset orange", [255, 70, 10]], ["Rose", [255, 40, 80]], ["Lavender", [150, 60, 255]],
+  ["Ocean", [0, 90, 255]], ["Forest", [20, 200, 40]],
+];
+function renderWakeColors() {
+  const box = $("#wakeColors");
+  const chosen = store.get("wakeColor", "natural");
+  const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.every((x, i) => x === b[i]);
+  const favs = store.get("favs", []).map((rgb) => ["Saved color", rgb]);
+  const options = [["Natural sunrise (red → warm white)", "natural"], ...WAKE_PRESETS, ...favs];
+  // A color picked with "Any color…" that isn't in the list still gets its own swatch.
+  if (chosen !== "natural" && !options.some(([, v]) => same(v, chosen))) options.push(["Your color", chosen]);
+  box.innerHTML = "";
+  let chosenName = "";
+  for (const [name, value] of options) {
+    const b = document.createElement("button");
+    b.className = "swatch";
+    b.style.background = value === "natural"
+      ? `conic-gradient(from 200deg, ${SUNRISE_FRAMES.map((f) => hex(f.rgb)).join(", ")}, ${hex(SUNRISE_FRAMES[0].rgb)})`
+      : hex(value);
+    const on = value === chosen || same(value, chosen);
+    if (on) chosenName = name;
+    b.setAttribute("aria-pressed", String(on));
+    b.setAttribute("aria-label", name);
+    b.title = name;
+    b.onclick = () => { store.set("wakeColor", value); renderWakeColors(); };
+    box.append(b);
+  }
+  // "Any color…" opens the phone's own color picker.
+  const any = document.createElement("label");
+  any.className = "swatch any"; any.title = "Any color…";
+  any.innerHTML = `<span aria-hidden="true">+</span><input type="color" aria-label="Pick any wake-up color">`;
+  const input = any.querySelector("input");
+  input.value = chosen === "natural" ? "#ffaa50" : hex(chosen);
+  input.onchange = () => {
+    const v = input.value.match(/[0-9a-f]{2}/gi).map((h) => parseInt(h, 16));
+    store.set("wakeColor", v); renderWakeColors();
+  };
+  box.append(any);
+  $("#wakeColorName").textContent = chosenName;
 }
 let wakeLock = null;
 async function requestWakeLock() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
@@ -435,7 +483,7 @@ function renderFavs() {
     b.className = "fav"; b.style.background = hex(rgb);
     b.setAttribute("aria-label", (editingFavs ? "Delete saved color " : "Use saved color ") + hex(rgb));
     b.onclick = () => {
-      if (editingFavs) { favs.splice(i, 1); store.set("favs", favs); if (!favs.length) editingFavs = false; renderFavs(); }
+      if (editingFavs) { favs.splice(i, 1); store.set("favs", favs); if (!favs.length) editingFavs = false; renderFavs(); renderWakeColors(); }
       else { cancelFade(); setColor(rgb); }
     };
     box.append(b);
@@ -443,7 +491,7 @@ function renderFavs() {
   if (!editingFavs) {
     const add = document.createElement("button");
     add.className = "fav add"; add.textContent = "+"; add.setAttribute("aria-label", "Save current color");
-    add.onclick = () => { favs.push(hsvToRgb(state.hsv)); store.set("favs", favs.slice(-12)); renderFavs(); };
+    add.onclick = () => { favs.push(hsvToRgb(state.hsv)); store.set("favs", favs.slice(-12)); renderFavs(); renderWakeColors(); };
     box.append(add);
   }
   const edit = $("#favEdit");

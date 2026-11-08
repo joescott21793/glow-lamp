@@ -127,7 +127,10 @@
 
       <div class="timer" data-timer-panel="wake" hidden>
         <h2>Sunrise wake-up</h2>
-        <p class="hint">Starts deep red and slowly brightens to warm daylight, fully bright at the time you pick.</p>
+        <p class="hint">Slowly brightens from almost dark, so it's fully bright at the time you pick.</p>
+        <p class="label">Wake-up color</p>
+        <div class="swatches" id="wakeColors"></div>
+        <p class="hint" id="wakeColorName"></p>
         <p class="label">Fully bright at</p>
         <div class="time-row"><input type="time" id="wakeAt" value="07:00"></div>
         <p class="label">Sunrise lasts</p>
@@ -135,7 +138,11 @@
         <button id="sunriseGo" class="btn-primary">Set wake-up</button>
       </div>
 
-      <p class="hint fine">Timers run on this page. Keep it open with your phone near the lamp; the screen stays on.</p>
+      <div class="notice timer-note">
+        <b>Your phone runs the timer, not the lamp.</b>
+        Until it finishes, leave Glow open on screen and keep your phone in the same room as the lamp,
+        ideally plugged in. If you close Glow, switch apps or your phone locks, the timer stops.
+      </div>
     </section>
   </main>
 

@@ -1,4 +1,4 @@
-const CACHE = "glow-v6";
+const CACHE = "glow-v7";
 const FILES = ["./", "index.html", "style.css", "app.js", "protocols.js", "manifest.webmanifest", "icon.svg"];
 self.addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES))));
 self.addEventListener("activate", (e) =>
